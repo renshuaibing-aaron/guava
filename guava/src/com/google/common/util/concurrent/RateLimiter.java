@@ -1,17 +1,3 @@
-/*
- * Copyright (C) 2012 The Guava Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
- * in compliance with the License. You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software distributed under the License
- * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
- * or implied. See the License for the specific language governing permissions and limitations under
- * the License.
- */
-
 package com.google.common.util.concurrent;
 
 import static com.google.common.base.Preconditions.checkArgument;
@@ -131,7 +117,11 @@ public abstract class RateLimiter {
 
   @VisibleForTesting
   static RateLimiter create(double permitsPerSecond, SleepingStopwatch stopwatch) {
+    // maxBurstSeconds 用于计算 maxPermits
+    //todo maxBurstSeconds 构造函数参数主要用于计算 maxPermits ：maxPermits = maxBurstSeconds * permitsPerSecond;
+    //这里1的意思是 1秒 也就是这里最多缓存1秒的令牌
     RateLimiter rateLimiter = new SmoothBursty(stopwatch, 1.0 /* maxBurstSeconds */);
+    //设置生成令牌的速率
     rateLimiter.setRate(permitsPerSecond);
     return rateLimiter;
   }
@@ -290,6 +280,7 @@ public abstract class RateLimiter {
   }
 
   /**
+   *
    * Acquires the given number of permits from this {@code RateLimiter}, blocking until the request
    * can be granted. Tells the amount of time slept, if any.
    *
@@ -301,6 +292,7 @@ public abstract class RateLimiter {
   @CanIgnoreReturnValue
   public double acquire(int permits) {
     long microsToWait = reserve(permits);
+    //这个地方会进行等待
     stopwatch.sleepMicrosUninterruptibly(microsToWait);
     return 1.0 * microsToWait / SECONDS.toMicros(1L);
   }
@@ -394,6 +386,7 @@ public abstract class RateLimiter {
   }
 
   /**
+   * 用于尝试获取若干个 permit，此方法不会等待，如果获取失败则直接返回失败
    * Acquires the given number of permits from this {@code RateLimiter} if it can be obtained
    * without exceeding the specified {@code timeout}, or returns {@code false} immediately (without
    * waiting) if the permits would not have been granted before the timeout expired.
@@ -411,9 +404,12 @@ public abstract class RateLimiter {
     long microsToWait;
     synchronized (mutex()) {
       long nowMicros = stopwatch.readMicros();
+
+      //首先判断当前超时时间之内请求能否被满足，不能满足的话直接返回失败
       if (!canAcquire(nowMicros, timeoutMicros)) {
         return false;
       } else {
+        // 计算本次请求需要等待的时间，核心方法
         microsToWait = reserveAndGetWaitLength(permits, nowMicros);
       }
     }
@@ -421,6 +417,7 @@ public abstract class RateLimiter {
     return true;
   }
 
+  // nextFreeTicketMicros 减去 timeoutMicros 是否小于等于 nowMicros。如果当前需求能被满足，则继续往下走
   private boolean canAcquire(long nowMicros, long timeoutMicros) {
     return queryEarliestAvailable(nowMicros) - timeoutMicros <= nowMicros;
   }

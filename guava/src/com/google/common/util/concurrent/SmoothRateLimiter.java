@@ -1,17 +1,3 @@
-/*
- * Copyright (C) 2012 The Guava Authors
- *
- * Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
- * in compliance with the License. You may obtain a copy of the License at
- *
- * http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software distributed under the License
- * is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express
- * or implied. See the License for the specific language governing permissions and limitations under
- * the License.
- */
-
 package com.google.common.util.concurrent;
 
 import static java.lang.Math.min;
@@ -138,11 +124,11 @@ abstract class SmoothRateLimiter extends RateLimiter {
    * we would only increase it for arrivals _later_ than the expected one second.
    */
 
-  /**
+  /**todo
    * This implements the following function where coldInterval = coldFactor * stableInterval.
    *
    * <pre>
-   *          ^ throttling
+   *          ^ throttling  请求的间隔时间
    *          |
    *    cold  +                  /
    * interval |                 /.
@@ -156,10 +142,18 @@ abstract class SmoothRateLimiter extends RateLimiter {
    * interval |          .   UP  .
    *          |          . PERIOD.
    *          |          .       .
-   *        0 +----------+-------+--------------→ storedPermits
+   *        0 +----------+-------+--------------→ storedPermits  当前令牌桶中的令牌 storedPermits 分为两个区间：[0, thresholdPermits) 和 [thresholdPermits, maxPermits]
    *          0 thresholdPermits maxPermits
    * </pre>
    *
+   *
+   * 上图中横坐标是当前令牌桶中的令牌 storedPermits，前面说过 SmoothWarmingUp 将 storedPermits 分为
+   * 两个区间：[0, thresholdPermits) 和 [thresholdPermits, maxPermits]。
+   * 纵坐标是请求的间隔时间，stableInterval 就是 1 / QPS，例如设置的 QPS 为5，则 stableInterval 就是200ms，
+   * coldInterval = stableInterval * coldFactor，这里的 coldFactor "hard-code"写死的是3。
+   *
+   * 当系统进入 cold 阶段时，图像会向右移，直到 storedPermits 等于 maxPermits；
+   * 当系统请求增多，图像会像左移动，直到 storedPermits 为0
    * Before going into the details of this particular function, let's keep in mind the basics:
    *
    * <ol>
@@ -238,25 +232,35 @@ abstract class SmoothRateLimiter extends RateLimiter {
       }
     }
 
+    //SmoothWarmingUp 类中 storedPermitsToWaitTime 方法将 permitsToTake 分为两部分，
+    // 一部分从 WARM UP PERIOD 部分拿，这部分是一个梯形，面积计算就是（上底 + 下底）* 高 / 2。
+    // 另一部分从 stable 部分拿，它是一个长方形，面积就是 长 * 宽。最后返回两个部分的时间总和
     @Override
     long storedPermitsToWaitTime(double storedPermits, double permitsToTake) {
       double availablePermitsAboveThreshold = storedPermits - thresholdPermits;
       long micros = 0;
       // measuring the integral on the right part of the function (the climbing line)
+      //如果当前 storedPermits 超过 availablePermitsAboveThreshold 则计算从 超过部分拿令牌所需要的时间（图中的 WARM UP PERIOD）
       if (availablePermitsAboveThreshold > 0.0) {
+        // WARM UP PERIOD 部分计算的方法，这部分是一个梯形，梯形的面积计算公式是 “（上底 + 下底） * 高 / 2”
         double permitsAboveThresholdToTake = min(availablePermitsAboveThreshold, permitsToTake);
         // TODO(cpovirk): Figure out a good name for this variable.
         double length =
             permitsToTime(availablePermitsAboveThreshold)
                 + permitsToTime(availablePermitsAboveThreshold - permitsAboveThresholdToTake);
+        // 计算出从 WARM UP PERIOD 拿走令牌的
         micros = (long) (permitsAboveThresholdToTake * length / 2.0);
+
+        // 剩余的令牌从 stable 部分拿
         permitsToTake -= permitsAboveThresholdToTake;
       }
       // measuring the integral on the left part of the function (the horizontal line)
+      // stable 部分令牌获取花费的时间
       micros += (long) (stableIntervalMicros * permitsToTake);
       return micros;
     }
 
+    // WARM UP PERIOD 部分 获取相应令牌所对应的的时间
     private double permitsToTime(double permits) {
       return stableIntervalMicros + permits * slope;
     }
@@ -297,6 +301,8 @@ abstract class SmoothRateLimiter extends RateLimiter {
       }
     }
 
+
+    //牛逼 直接返回0
     @Override
     long storedPermitsToWaitTime(double storedPermits, double permitsToTake) {
       return 0L;
@@ -308,19 +314,24 @@ abstract class SmoothRateLimiter extends RateLimiter {
     }
   }
 
+  //表明当前令牌桶中有多少令牌
   /** The currently stored permits. */
   double storedPermits;
 
+  //表示令牌桶最大令牌数目
   /** The maximum number of stored permits. */
   double maxPermits;
 
   /**
+   * stableIntervalMicros 等于 1/qps，它代表系统在稳定期间，两次请求之间间隔的微秒数。
+   * 例如：如果我们设置的 qps 为5，则 stableIntervalMicros 为200ms
    * The interval between two unit requests, at our stable rate. E.g., a stable rate of 5 permits
    * per second has a stable interval of 200ms.
    */
   double stableIntervalMicros;
 
   /**
+   * nextFreeTicketMicros 表示系统处理完当前请求后，下一次请求被许可的最短微秒数，如果在这之前有请求进来，则必须等待
    * The time when the next request (no matter its size) will be granted. After granting a request,
    * this is pushed further in the future. Large requests push this further than small requests.
    */
@@ -330,6 +341,11 @@ abstract class SmoothRateLimiter extends RateLimiter {
     super(stopwatch);
   }
 
+  /**
+   * 设置速率
+   * @param permitsPerSecond
+   * @param nowMicros
+   */
   @Override
   final void doSetRate(double permitsPerSecond, long nowMicros) {
     resync(nowMicros);
@@ -350,18 +366,52 @@ abstract class SmoothRateLimiter extends RateLimiter {
     return nextFreeTicketMicros;
   }
 
+  /**
+   * 该方法返回当前请求需要等待的时间
+   * @param requiredPermits
+   * @param nowMicros
+   * @return
+   */
   @Override
   final long reserveEarliestAvailable(int requiredPermits, long nowMicros) {
+    // 本次请求和上次请求之间间隔的时间是否应该有新的令牌生成，如果有则更新 storedPermits
     resync(nowMicros);
     long returnValue = nextFreeTicketMicros;
+
+    // 本次请求的令牌数 requiredPermits 由两个部分组成：storedPermits 和 freshPermits，storedPermits 是令牌桶中已有的令牌
+    // freshPermits 是需要新生成的令牌数
     double storedPermitsToSpend = min(requiredPermits, this.storedPermits);
     double freshPermits = requiredPermits - storedPermitsToSpend;
-    long waitMicros =
-        storedPermitsToWaitTime(this.storedPermits, storedPermitsToSpend)
-            + (long) (freshPermits * stableIntervalMicros);
 
+    // 分别计算从两个部分拿走的令牌各自需要等待的时间，然后总和作为本次请求需要等待的时间，SmoothBursty 中从 storedPermits 拿走的部分不需要等待时间
+
+    /**
+     * 对于需要从 storedPermits 中拿出来的部分则计算比较复杂，这个计算逻辑在 storedPermitsToWaitTime 方法中实现。
+     * storedPermitsToWaitTime 方法在 SmoothBursty 和 SmoothWarmingUp 中有不同的实现。
+     * storedPermitsToWaitTime 意思就是表示当前请求从 storedPermits 中拿出来的令牌数需要等待的时间，
+     * 因为 SmoothBursty 中没有“热身”的概念， storedPermits 中有多少个就可以用多少个，不需要等待，因此 storedPermitsToWaitTime
+     * 方法在 SmoothBursty 中返回的是0。而它在 SmoothWarmingUp 中的实现后面会着重分析
+     */
+    long storedPermitsToWaitTime= storedPermitsToWaitTime(this.storedPermits, storedPermitsToSpend);
+
+     //freshPermits 部分的时间比较好计算：直接拿 freshPermits 乘以stableIntervalMicros 就可以得到
+    long freshPermitsToWaitTime = (long) (freshPermits * stableIntervalMicros);
+
+    long waitMicros =storedPermitsToWaitTime + freshPermitsToWaitTime;
+
+    // 更新 nextFreeTicketMicros，这里更新的其实是下一次请求的时间，是一种“预消费”
+    //算到了本次请求需要等待的时间之后，会将这个时间加到 nextFreeTicketMicros 中去
     this.nextFreeTicketMicros = LongMath.saturatedAdd(nextFreeTicketMicros, waitMicros);
+
+    // 更新 storedPermits 从 storedPermits 减去本次请求从这部分拿走的令牌数量
     this.storedPermits -= storedPermitsToSpend;
+
+    //todo  注意这个地方的返回值
+    //  怎么返回的不是 waitMicros而是nextFreeTicketMicros
+    //reserveEarliestAvailable 方法返回的是本次请求需要等待的时间，该方法中算出来的
+    // waitMicros 按理来说是应该作为返回值的，但是这个方法返回的却是开始时的 nextFreeTicketMicros ，
+    // 而算出来的 waitMicros 累加到 nextFreeTicketMicros 中去了。这里其实就是“预消费”，让下一次消费来为本次消费来“买单”
+
     return returnValue;
   }
 
@@ -379,12 +429,24 @@ abstract class SmoothRateLimiter extends RateLimiter {
    */
   abstract double coolDownIntervalMicros();
 
+
+  //惰性计算
   /** Updates {@code storedPermits} and {@code nextFreeTicketMicros} based on the current time. */
   void resync(long nowMicros) {
+
+    //首先判断当前时间是不是大于 nextFreeTicketMicros ，如果是则代表系统已经"cool down"， 这两次请求之间应该有新的 permit 生成
     // if nextFreeTicket is in the past, resync to now
     if (nowMicros > nextFreeTicketMicros) {
+
+      //计算本次应该新添加的 permit 数量，这里分式的分母是 coolDownIntervalMicros 方法，它是一个抽象方法。
+      // 在 SmoothBursty 和 SmoothWarmingUp 中分别有不同的实现。SmoothBursty 中返回的是 stableIntervalMicros 也即是 1 / QPS。
+      // coolDownIntervalMicros 方法在 SmoothWarmingUp 中的计算方式为warmupPeriodMicros / maxPermits，
+      // warmupPeriodMicros 是 SmoothWarmingUp 的“预热”时间
       double newPermits = (nowMicros - nextFreeTicketMicros) / coolDownIntervalMicros();
+
       storedPermits = min(maxPermits, storedPermits + newPermits);
+
+      //设置 nextFreeTicketMicros 为 nowMicros
       nextFreeTicketMicros = nowMicros;
     }
   }

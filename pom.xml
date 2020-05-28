@@ -61,6 +61,7 @@
     <module>guava-gwt</module>
     <module>guava-testlib</module>
     <module>guava-tests</module>
+      <module>guava-aaron-test</module>
   </modules>
   <build>
     <!-- Handle where Guava deviates from Maven defaults -->
